@@ -15,6 +15,13 @@ psi_rr = qutip.tensor(qutip.basis(3, 2), qutip.basis(3, 2))
 
 state_to_idx = {"00": 0, "01": 1, "0r": 2, "10": 3, "11": 4, "1r": 5, "r0": 6, "r1": 7, "rr": 8}
 
+cz_target_states = [
+    qutip.Qobj([1, 0, 0, 0]),
+    qutip.Qobj([0, 1, 0, 0]),
+    qutip.Qobj([0, 0, 1, 0]),
+    qutip.Qobj([0, 0, 0, -1])
+]
+
 # general function for creating an Rydberg Hamiltonian with arbitrary drive strength and phase profile, but fixed detuning
 def hamiltonian_from_pulse_profile(drive_strength, phase, blockade_strength, detuning=0):
     """drive strength should be real"""
@@ -68,3 +75,18 @@ def simulate_gate(drive_strength_func, phase_func, blockade_strength, detuning, 
         plot_populations(results, psi0_strs, ts)
 
     return results
+
+def calculate_fidelity(results, single_qubit_phase = 0, target_states=cz_target_states):
+    sq_gate = qutip.Qobj([[1, 0, 0, 0],
+                                   [0, np.exp(1j * single_qubit_phase), 0, 0],
+                                   [0, 0, np.exp(1j * single_qubit_phase), 0],
+                                   [0, 0, 0, np.exp(2j * single_qubit_phase)]])
+
+    sum1 = 0
+    sum2 = 0
+    for i in range(4): # four basis states
+        final_state = qutip.Qobj(results[i].states[-1].full().flatten()[[0, 1, 3, 4]])
+        a = target_states[i].dag() * sq_gate * final_state
+        sum1 += a
+        sum2 += np.abs(a) ** 2
+    return 1/20 * (np.abs(sum1) ** 2 + sum2)
