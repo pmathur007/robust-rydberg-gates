@@ -70,7 +70,7 @@ def make_ode_rhs(H0, H_controls, control_funcs, control_param_derivs, control_ex
     
     return ode_rhs
 
-def gate_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
+def goat_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
     N = U.shape[0]
 
     single_qubit_phase_weights = np.array(single_qubit_phase_weights)
@@ -102,6 +102,35 @@ def gate_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, si
     # return infidelity2, grad
     return infidelity, grad
 
+def to_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
+    """This function only works for time-optimal gates and using the truncated target unitary"""
+    single_qubit_phase_weights = np.array(single_qubit_phase_weights)
+    U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
+    dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
+
+    U_ops = U_target.conj().T @ U_sqphase @ U
+    a01 = U_ops[0,0]
+    a11 = U_ops[1,1]
+    tr_sum = 1 + 2*a01 + a11
+    fidelity = (1/20) * ( (np.abs(tr_sum) ** 2) + 1 + 2*(np.abs(a01) ** 2) + (np.abs(a11) ** 2) )
+
+    C = dU_dalpha_list.shape[0]
+    grad = np.zeros(C + 1, dtype=float)
+    for i in range(C):
+        dU_ops = U_target.conj().T @ U_sqphase @ dU_dalpha_list[i]
+        da01 = dU_ops[0,0]
+        da11 = dU_ops[1,1]
+        grad[i] += (1/10) * np.real(np.conj(tr_sum) * (2*da01 + da11))
+        grad[i] += (1/10) * (2*np.real(np.conj(a01) * da01) + np.real(np.conj(a11) * da11))
+    dU_phase_ops = U_target.conj().T @ dU_sqphase @ U
+    dphase_a01 = dU_phase_ops[0,0]
+    dphase_a11 = dU_phase_ops[1,1]
+    grad[-1] += (1/10) * (np.real(np.conj(tr_sum) * (1 + 2*dphase_a01 + dphase_a11)))
+    grad[-1] += (1/10) * (1 + 2*np.real(np.conj(a01) * dphase_a01) + np.real(np.conj(a11) * dphase_a11))
+
+    return 1 - fidelity, -grad
+
+
 def run_goat_optimization(
         H0,
         H_controls,
@@ -112,6 +141,7 @@ def run_goat_optimization(
         t_span,
         U_truncator,
         single_qubit_phase_weights,
+        fidelity_func_name="GOAT",
         alpha_bounds=None,
         constraints=None,
         control_extra_params=None,
@@ -125,6 +155,11 @@ def run_goat_optimization(
 
     ode_rhs_func = make_ode_rhs(H0, H_controls, control_funcs, control_param_derivs, control_extra_params=control_extra_params)
 
+    if fidelity_func_name == "TO":
+        fidelity_func = to_infidelity_and_grad
+    else:
+        fidelity_func = goat_infidelity_and_grad 
+
     def eval_cost_and_grad(alpha, single_qubit_phase):
         n_blocks = 1 + C
         mats0 = np.zeros((n_blocks, N, N), dtype=complex)
@@ -137,7 +172,7 @@ def run_goat_optimization(
             y0=y0,
             rtol=ode_rtol,
             atol=ode_atol,
-            method="RK45"
+            method="DOP853"
         )
 
         yf = sol.y[:, -1]
@@ -152,13 +187,14 @@ def run_goat_optimization(
             U_final = mats_final[0]
             dU_final = mats_final[1:]
 
-        cost, grad = gate_infidelity_and_grad(U_target, U_final, dU_final, single_qubit_phase, single_qubit_phase_weights) 
+        cost, grad = fidelity_func(U_target, U_final, dU_final, single_qubit_phase, single_qubit_phase_weights) 
         # print(f"Cost: {cost}, Grad: {grad}")
         # print("---")
         return cost, grad
 
     if optimizer_opts is None:
-        optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-20, "gtol": 1e-20}
+        optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-10, "gtol": 1e-10} # for L-BFGS-B
+        # optimizer_opts = {"maxiter": 200, "disp": True, "gtol": 1e-10, "xtol": 1e-10} # for trust-constr
 
     res = minimize(
         fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
