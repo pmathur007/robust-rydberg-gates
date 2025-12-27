@@ -193,7 +193,7 @@ def run_goat_optimization(
         return cost, grad
 
     if optimizer_opts is None:
-        optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-10, "gtol": 1e-10} # for L-BFGS-B
+        optimizer_opts = {"maxiter": 400, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
         # optimizer_opts = {"maxiter": 200, "disp": True, "gtol": 1e-10, "xtol": 1e-10} # for trust-constr
 
     res = minimize(
