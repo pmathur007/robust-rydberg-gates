@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.integrate import solve_ivp
-from scipy.optimize import minimize
+from scipy.optimize import minimize, BFGS
 
 from scipy.constants import h
 hbar = h / 2*np.pi
@@ -193,16 +193,29 @@ def run_goat_optimization(
         return cost, grad
 
     if optimizer_opts is None:
-        optimizer_opts = {"maxiter": 400, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
-        # optimizer_opts = {"maxiter": 200, "disp": True, "gtol": 1e-10, "xtol": 1e-10} # for trust-constr
+        # optimizer_opts = {"maxiter": 400, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
+        optimizer_opts = {"maxiter": 1000, "verbose": 3, "gtol": 1e-10, "xtol": 1e-10, 
+                          "initial_barrier_parameter": 1e-3, "initial_barrier_tolerance": 1e-3, "barrier_tol": 1e-6} # for trust-constr
+
+    # res = minimize(
+    #     fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
+    #     x0=alpha0,
+    #     jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
+    #     bounds=alpha_bounds,
+    #     constraints=constraints,
+    #     method="L-BFGS-B",
+    #     options=optimizer_opts,
+    #     callback=callback
+    # )
 
     res = minimize(
         fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
         x0=alpha0,
         jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
+        hess=BFGS(),
         bounds=alpha_bounds,
         constraints=constraints,
-        method="L-BFGS-B",
+        method="trust-constr",
         options=optimizer_opts,
         callback=callback
     )
