@@ -120,13 +120,13 @@ def to_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, sing
         dU_ops = U_target.conj().T @ U_sqphase @ dU_dalpha_list[i]
         da01 = dU_ops[0,0]
         da11 = dU_ops[1,1]
-        grad[i] += (1/10) * np.real(np.conj(tr_sum) * (2*da01 + da11))
+        grad[i] += (1/10) * np.real(np.conj(tr_sum) * (2*da01 + da11)) 
         grad[i] += (1/10) * (2*np.real(np.conj(a01) * da01) + np.real(np.conj(a11) * da11))
     dU_phase_ops = U_target.conj().T @ dU_sqphase @ U
     dphase_a01 = dU_phase_ops[0,0]
     dphase_a11 = dU_phase_ops[1,1]
-    grad[-1] += (1/10) * (np.real(np.conj(tr_sum) * (1 + 2*dphase_a01 + dphase_a11)))
-    grad[-1] += (1/10) * (1 + 2*np.real(np.conj(a01) * dphase_a01) + np.real(np.conj(a11) * dphase_a11))
+    grad[-1] += (1/10) * (np.real(np.conj(tr_sum) * (2*dphase_a01 + dphase_a11)))
+    grad[-1] += (1/10) * (2*np.real(np.conj(a01) * dphase_a01) + np.real(np.conj(a11) * dphase_a11))
 
     return 1 - fidelity, -grad
 
@@ -193,7 +193,7 @@ def run_goat_optimization(
         return cost, grad
 
     if optimizer_opts is None:
-        # optimizer_opts = {"maxiter": 400, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
+        # optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
         optimizer_opts = {"maxiter": 1000, "verbose": 3, "gtol": 1e-10, "xtol": 1e-10, 
                           "initial_barrier_parameter": 1e-3, "initial_barrier_tolerance": 1e-3, "barrier_tol": 1e-6} # for trust-constr
 

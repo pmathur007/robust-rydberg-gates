@@ -67,9 +67,11 @@ def simulate_gate(drive_strength_func, phase_func, blockade_strength, detuning, 
                                           phase_func,
                                           blockade_strength,
                                           detuning=detuning)
+    
+    options = qutip.Options(max_step=0.01, atol=1e-12, rtol=1e-10, method="dop853")
     results = []
     for psi0 in psi0s:
-        results.append(qutip.mesolve(H, psi0, ts, []))
+        results.append(qutip.sesolve(H, psi0, ts, [], options=options))
     
     if plot:
         plot_populations(results, psi0_strs, ts)
@@ -78,10 +80,9 @@ def simulate_gate(drive_strength_func, phase_func, blockade_strength, detuning, 
 
 def calculate_fidelity(results, single_qubit_phase = 0, target_states=cz_target_states):
     sq_gate = qutip.Qobj([[1, 0, 0, 0],
-                                   [0, np.exp(1j * single_qubit_phase), 0, 0],
-                                   [0, 0, np.exp(1j * single_qubit_phase), 0],
-                                   [0, 0, 0, np.exp(2j * single_qubit_phase)]])
-
+                            [0, np.exp(1j * single_qubit_phase), 0, 0],
+                            [0, 0, np.exp(1j * single_qubit_phase), 0],
+                            [0, 0, 0, np.exp(2j * single_qubit_phase)]])
     sum1 = 0
     sum2 = 0
     for i in range(4): # four basis states
