@@ -1,5 +1,6 @@
 """
 GOAT implementation (closed-system unitary version).
+by: ChatGPT
 References:
   Machnes et al., "Tunable, Flexible, and Efficient Optimization of Control Pulses for Practical Qubits"
   (arXiv / PRL) and its supplemental material. See:

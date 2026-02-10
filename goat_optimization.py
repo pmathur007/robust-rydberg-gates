@@ -70,6 +70,60 @@ def make_ode_rhs(H0, H_controls, control_funcs, control_param_derivs, control_ex
     
     return ode_rhs
 
+def make_unitary_hessian_ode_rhs(H0, H_controls, control_funcs, control_param_derivs, control_param_hessians, control_extra_params=None):
+    N = H0.shape[0]
+    n_controls = len(H_controls)
+
+    def ode_rhs(t, y, alpha):
+        C = alpha.size
+        n_blocks = 1 + C + C*C
+        mats = unpack_complex_vector(y, n_blocks, N)
+        U = mats[0]
+        dUs = mats[1:] # shape (C, N, N)
+        ddUs = mats[C:] # shape (C*C, N, N)
+
+        # Build H(t)
+        H = H0.copy()
+        for k in range(n_controls):
+            ck = control_funcs[k](t, alpha, control_extra_params=control_extra_params)
+            H = H + ck * H_controls[k]
+        
+        # get derivatives of H w.r.t. alpha
+        dc = control_param_derivs(t, alpha, control_extra_params=control_extra_params) # shape (n_controls, C)
+        dH_dalpha = np.zeros((C, N, N), dtype=complex)
+        for i in range(C):
+            for k in range(n_controls):
+                dH_dalpha[i] += dc[k,i] * H_controls[k]
+
+        # get second derivaties of H w.r.t. alpha
+        ddc = control_param_hessians(t, alpha, control_extra_params=control_extra_params) # shape (n_controls, C, C)
+        ddH_ddalpha = np.zeros((C*C, N, N), dtype=complex)
+        for i in range(C):
+            for j in range(C):
+                for k in range(n_controls):
+                    ddH_ddalpha[C*i+j] += ddc[k][i][j] * H_controls[k]
+
+        # using hamiltonian derivatives, compute RHS of ODE
+        dU_dt = -1j * (H @ U)
+
+        ddU_dt = np.zeros((C, N, N), dtype=complex)
+        for i in range(C):
+            ddU_dt[i] = -1j * (H @ dUs[i]) - 1j * (dH_dalpha[i] * U)
+
+        dddU_dt = np.zeros((C*C, N, N), dtype=complex)
+        for i in range(C):
+            for j in range(C):
+                dddU_dt[C*i+j] = -1j * (ddH_ddalpha[C*i+j] @ U + 
+                                        dH_dalpha[j] @ dUs[i] + 
+                                        dH_dalpha[i] @ dUs[j] + 
+                                        H @ ddUs[C*i+j])
+        
+        # pack back into real vector
+        mats_out = np.vstack([dU_dt[np.newaxis, ...], ddU_dt, dddU_dt])
+        return pack_complex_list(mats_out)
+
+    return ode_rhs
+
 def goat_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
     N = U.shape[0]
 
@@ -77,29 +131,48 @@ def goat_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, si
     U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
     dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
 
-    # print(f"U_sqphase: {U_sqphase}")
-    # print(f"dU_sqphase: {dU_sqphase}")
-    # print(f"U: {U}")
     O = np.trace(U_target.conj().T @ U_sqphase @ U)
-    # print(f"O: {O}")
-    # infidelity2 = 1 - (np.abs(O) / N) ** 2 # square so its differentiable
     infidelity = 1 - (np.abs(O)/N) 
 
     C = dU_dalpha_list.shape[0]
     grad = np.zeros(C + 1, dtype=float)
 
     for i in range(C):
-        # print(f"dU_dalpha_{i}: {dU_dalpha_list[i]}")
         dO = np.trace(U_target.conj() @ U_sqphase @ dU_dalpha_list[i])
-        # print(f"dO_{i}: {dO}")
-        # grad[i] = -2 * np.real((np.conj(O) / (N**2)) * dO)
         grad[i] = -(1/N) * np.real( (np.conj(O) / np.abs(O)) * dO)
     dO = np.trace(U_target.conj() @ dU_sqphase @ U)
-    # print(f"dO_sqphase: {dO}")
-    # grad[-1] = -2 * np.real((np.conj(O) / (N**2)) * dO)
     grad[-1] = -(1/N) * np.real( (np.conj(O) / np.abs(O)) * dO)
 
-    # return infidelity2, grad
+    return infidelity, grad
+
+def goat_full_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
+    N = 4
+
+    U_full = np.zeros((N, N), dtype=complex)
+    U_full[0, 0] = 1
+    U_full[1::2, 1::2] = U[0:2, 0:2]
+    U_full[2:, 2:] = U[0:2, 0:2]
+
+    dU_dalpha_list_full = np.zeros((dU_dalpha_list.shape[0], N, N), dtype=complex)
+    dU_dalpha_list_full[:, 1::2, 1::2] = dU_dalpha_list[:, 0:2, 0:2]
+    dU_dalpha_list_full[:, 2:, 2:] = dU_dalpha_list[:, 0:2, 0:2]
+
+    single_qubit_phase_weights = np.array([0, single_qubit_phase_weights[0], single_qubit_phase_weights[0], single_qubit_phase_weights[1]])
+    U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
+    dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
+
+    O = np.trace(U_target.conj().T @ U_sqphase @ U_full)
+    infidelity = 1 - (np.abs(O)/N) 
+
+    C = dU_dalpha_list_full.shape[0]
+    grad = np.zeros(C + 1, dtype=float)
+
+    for i in range(C):
+        dO = np.trace(U_target.conj() @ U_sqphase @ dU_dalpha_list_full[i])
+        grad[i] = -(1/N) * np.real( (np.conj(O) / np.abs(O)) * dO)
+    dO = np.trace(U_target.conj() @ dU_sqphase @ U_full)
+    grad[-1] = -(1/N) * np.real( (np.conj(O) / np.abs(O)) * dO)
+
     return infidelity, grad
 
 def to_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, single_qubit_phase_weights):
@@ -130,6 +203,88 @@ def to_infidelity_and_grad(U_target, U, dU_dalpha_list, single_qubit_phase, sing
 
     return 1 - fidelity, -grad
 
+def to_infidelity_hessian(
+        H0, 
+        H_controls, 
+        control_funcs, 
+        control_param_derivs, 
+        control_param_hessians,
+        alpha,
+        U_target,
+        t_span,
+        U_truncator,
+        single_qubit_phase_weights,
+        control_extra_params=None,
+        ode_rtol=1e-7,
+        ode_atol=1e-9,
+):
+    N = H0.shape[0]
+    C = alpha.size - 1
+    n_blocks = 1 + C + C*C
+    mats0 = np.zeros((n_blocks, N, N), dtype=complex)
+    mats0[0] = np.eye(N, dtype=complex)
+    y0 = pack_complex_list(mats0)
+
+    hessian_ode_rhs_func = make_unitary_hessian_ode_rhs(H0, 
+                                                        H_controls, 
+                                                        control_funcs, 
+                                                        control_param_derivs, 
+                                                        control_param_hessians, 
+                                                        control_extra_params=control_extra_params)
+
+    sol = solve_ivp(
+        fun = lambda t, y: hessian_ode_rhs_func(t, y, alpha[:-1]), # exclude single qubit phase
+        t_span=t_span,
+        y0=y0,
+        rtol=ode_rtol,
+        atol=ode_atol,
+        method="DOP853"
+    )
+
+    yf = sol.y[:, -1]
+
+    mats_final = unpack_complex_vector(yf, n_blocks, N)
+    if U_truncator is not None:
+        U = U_truncator(mats_final[0])
+        dU = U_truncator(mats_final[1:])
+        ddU = U_truncator(mats_final[C:])
+    else:
+        U = mats_final[0]
+        dU = mats_final[1:]
+        ddU = mats_final[C:]
+
+    # compute fidelity hessian
+    single_qubit_phase = alpha[-1] 
+    single_qubit_phase_weights = np.array(single_qubit_phase_weights)
+    U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
+    dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
+    ddU_sqphase = np.diag(-(single_qubit_phase_weights ** 2) * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
+
+    U_ops = U_target.conj().T @ U_sqphase @ U
+    a01 = U_ops[0,0]
+    a11 = U_ops[1,1]
+    tr_sum = 1 + 2*a01 + a11
+
+    da01s = np.zeros(C, dtype=complex)
+    da11s = np.zeros(C, dtype=complex)
+    for i in range(C):
+        dU_ops = U_target.conj().T @ U_sqphase @ dU[i]
+        da01s[i] = dU_ops[0,0]
+        da11s[i] = dU_ops[1,1]
+
+    hessian = np.zeros((C, C), dtype=float)
+    for i in range(C):
+        for j in range(C): 
+            ddU_ops = U_target.conj().T @ U_sqphase @ ddU[C*i+j]
+            dda01 = ddU_ops[0,0]
+            dda11 = ddU_ops[1,1]
+            hessian[i][j] += (1/10) * np.real( (2*dda01 + dda11) * np.conj(tr_sum) + (2*da01s[i] + da11s[i]) * np.conj(2*da01s[j] + da11s[j]) )
+            hessian[i][j] += (1/10) * (2 * np.real(dda01 * np.conj(a01)) + np.real(dda11 * np.conj(a11))) 
+            hessian[i][j] += (1/10) * (2 * np.real(da01s[i] * np.conj(da01s[j])) + np.real(da11s[i] * np.conj(da11s[j])) ) 
+
+    return hessian
+
+    # TODO: figure out phase stuff  
 
 def run_goat_optimization(
         H0,
@@ -141,6 +296,7 @@ def run_goat_optimization(
         t_span,
         U_truncator,
         single_qubit_phase_weights,
+        optimization_method="BFGS",
         fidelity_func_name="GOAT",
         alpha_bounds=None,
         constraints=None,
@@ -157,6 +313,8 @@ def run_goat_optimization(
 
     if fidelity_func_name == "TO":
         fidelity_func = to_infidelity_and_grad
+    elif fidelity_func_name == "GOAT_full":
+        fidelity_func = goat_full_infidelity_and_grad
     else:
         fidelity_func = goat_infidelity_and_grad 
 
@@ -177,47 +335,45 @@ def run_goat_optimization(
 
         yf = sol.y[:, -1]
         mats_final = unpack_complex_vector(yf, n_blocks, N)
-        # print(f"U_untruncated: {mats_final[0]}")
-        # print(f"dU_untruncated: {mats_final[1:]}")
         if U_truncator is not None:
             U_final = U_truncator(mats_final[0])
-            # print(U_final @ np.conj(U_final).T)
             dU_final = U_truncator(mats_final[1:])
         else:
             U_final = mats_final[0]
             dU_final = mats_final[1:]
 
         cost, grad = fidelity_func(U_target, U_final, dU_final, single_qubit_phase, single_qubit_phase_weights) 
-        # print(f"Cost: {cost}, Grad: {grad}")
-        # print("---")
         return cost, grad
 
-    if optimizer_opts is None:
-        # optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
-        optimizer_opts = {"maxiter": 1000, "verbose": 3, "gtol": 1e-10, "xtol": 1e-10, 
-                          "initial_barrier_parameter": 1e-3, "initial_barrier_tolerance": 1e-3, "barrier_tol": 1e-6} # for trust-constr
+    if optimization_method == "trust-constr":
+        if optimizer_opts is None:
+            optimizer_opts = {"maxiter": 1000, "verbose": 3, "gtol": 1e-10, "xtol": 1e-10, 
+                            "initial_barrier_parameter": 1e-3, "initial_barrier_tolerance": 1e-3, "barrier_tol": 1e-6} # for trust-constr
 
-    # res = minimize(
-    #     fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
-    #     x0=alpha0,
-    #     jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
-    #     bounds=alpha_bounds,
-    #     constraints=constraints,
-    #     method="L-BFGS-B",
-    #     options=optimizer_opts,
-    #     callback=callback
-    # )
+        res = minimize(
+            fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
+            x0=alpha0,
+            jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
+            hess=BFGS(),
+            bounds=alpha_bounds,
+            constraints=constraints,
+            method="trust-constr",
+            options=optimizer_opts,
+            callback=callback
+        )
+    else:
+        if optimizer_opts is None:
+            optimizer_opts = {"maxiter": 200, "disp": True, "ftol": 1e-15, "gtol": 1e-15} # for L-BFGS-B
 
-    res = minimize(
-        fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
-        x0=alpha0,
-        jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
-        hess=BFGS(),
-        bounds=alpha_bounds,
-        constraints=constraints,
-        method="trust-constr",
-        options=optimizer_opts,
-        callback=callback
-    )
+        res = minimize(
+            fun=lambda a: eval_cost_and_grad(a[:-1], a[-1])[0],
+            x0=alpha0,
+            jac=lambda a: eval_cost_and_grad(a[:-1], a[-1])[1],
+            bounds=alpha_bounds,
+            constraints=constraints,
+            method="L-BFGS-B",
+            options=optimizer_opts,
+            callback=callback
+        )
 
     return res
