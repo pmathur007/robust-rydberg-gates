@@ -79,8 +79,8 @@ def make_unitary_hessian_ode_rhs(H0, H_controls, control_funcs, control_param_de
         n_blocks = 1 + C + C*C
         mats = unpack_complex_vector(y, n_blocks, N)
         U = mats[0]
-        dUs = mats[1:] # shape (C, N, N)
-        ddUs = mats[C:] # shape (C*C, N, N)
+        dUs = mats[1:C+1] # shape (C, N, N)
+        ddUs = mats[C+1:] # shape (C*C, N, N)
 
         # Build H(t)
         H = H0.copy()
@@ -101,14 +101,14 @@ def make_unitary_hessian_ode_rhs(H0, H_controls, control_funcs, control_param_de
         for i in range(C):
             for j in range(C):
                 for k in range(n_controls):
-                    ddH_ddalpha[C*i+j] += ddc[k][i][j] * H_controls[k]
+                    ddH_ddalpha[C*i+j] += ddc[k,i,j] * H_controls[k]
 
         # using hamiltonian derivatives, compute RHS of ODE
         dU_dt = -1j * (H @ U)
 
         ddU_dt = np.zeros((C, N, N), dtype=complex)
         for i in range(C):
-            ddU_dt[i] = -1j * (H @ dUs[i]) - 1j * (dH_dalpha[i] * U)
+            ddU_dt[i] = -1j * (H @ dUs[i]) - 1j * (dH_dalpha[i] @ U)
 
         dddU_dt = np.zeros((C*C, N, N), dtype=complex)
         for i in range(C):
@@ -246,19 +246,23 @@ def to_infidelity_hessian(
     mats_final = unpack_complex_vector(yf, n_blocks, N)
     if U_truncator is not None:
         U = U_truncator(mats_final[0])
-        dU = U_truncator(mats_final[1:])
-        ddU = U_truncator(mats_final[C:])
+        dU = U_truncator(mats_final[1:C+1])
+        ddU = U_truncator(mats_final[C+1:])
     else:
         U = mats_final[0]
-        dU = mats_final[1:]
-        ddU = mats_final[C:]
+        dU = mats_final[1:C+1]
+        ddU = mats_final[C+1:]
 
     # compute fidelity hessian
     single_qubit_phase = alpha[-1] 
     single_qubit_phase_weights = np.array(single_qubit_phase_weights)
+
     U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
     dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
     ddU_sqphase = np.diag(-(single_qubit_phase_weights ** 2) * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
+    dsqU_ops = U_target.conj().T @ dU_sqphase @ U
+    dsqU_ops_a01 = dsqU_ops[0,0]
+    dsqU_ops_a11 = dsqU_ops[1,1]
 
     U_ops = U_target.conj().T @ U_sqphase @ U
     a01 = U_ops[0,0]
@@ -272,19 +276,31 @@ def to_infidelity_hessian(
         da01s[i] = dU_ops[0,0]
         da11s[i] = dU_ops[1,1]
 
-    hessian = np.zeros((C, C), dtype=float)
+    hessian = np.zeros((C+1, C+1), dtype=float)
     for i in range(C):
         for j in range(C): 
             ddU_ops = U_target.conj().T @ U_sqphase @ ddU[C*i+j]
             dda01 = ddU_ops[0,0]
             dda11 = ddU_ops[1,1]
-            hessian[i][j] += (1/10) * np.real( (2*dda01 + dda11) * np.conj(tr_sum) + (2*da01s[i] + da11s[i]) * np.conj(2*da01s[j] + da11s[j]) )
-            hessian[i][j] += (1/10) * (2 * np.real(dda01 * np.conj(a01)) + np.real(dda11 * np.conj(a11))) 
-            hessian[i][j] += (1/10) * (2 * np.real(da01s[i] * np.conj(da01s[j])) + np.real(da11s[i] * np.conj(da11s[j])) ) 
+            hessian[i,j] = (1/10) * np.real( (2*dda01 + dda11) * np.conj(tr_sum) + (2*da01s[i] + da11s[i]) * np.conj(2*da01s[j] + da11s[j])
+                                            + 2*dda01*np.conj(a01) + 2*da01s[i]*np.conj(da01s[j]) + dda11*np.conj(a11) + da11s[i]*np.conj(da11s[j]) )
+
+        dsqdU_ops = U_target.conj().T @ dU_sqphase @ dU[i]
+        dsqdU_ops_a01 = dsqdU_ops[0, 0]
+        dsqdU_ops_a11 = dsqdU_ops[1, 1]
+        hessian[i,-1] += (1/10) * np.real( (2*dsqdU_ops_a01 + dsqdU_ops_a11) * np.conj(tr_sum) + (2*dsqU_ops_a01 + dsqU_ops_a11) * np.conj(2*da01s[i] + da11s[i])) 
+        hessian[i,-1] += (1/10) * (2 * np.real(dsqdU_ops_a01 * np.conj(a01)) + np.real(dsqdU_ops_a11 * np.conj(a11)))
+        hessian[i,-1] += (1/10) * (2 * np.real(dsqU_ops_a01 * np.conj(da01s[i])) + np.real(dsqU_ops_a11 * np.conj(da11s[i])))
+        hessian[-1,i] = hessian[i,-1]
+
+    ddsqU_ops = U_target.conj().T @ ddU_sqphase @ U
+    ddsqU_ops_a01 = ddsqU_ops[0,0]
+    ddsqU_ops_a11 = ddsqU_ops[1,1]
+    hessian[-1,-1] += (1/10) * np.real( (2*ddsqU_ops_a01 + ddsqU_ops_a11) * np.conj(tr_sum) + (2*dsqU_ops_a01 + dsqU_ops_a11) ** 2)
+    hessian[-1,-1] += (1/10) * (2 * np.real(ddsqU_ops_a01 * np.conj(a01)) + np.real(ddsqU_ops_a11 * np.conj(a11)))
+    hessian[-1,-1] += (1/10) * (2 * np.real(np.abs(dsqU_ops_a01) ** 2) + np.real(np.abs(dsqU_ops_a11) ** 2))
 
     return hessian
-
-    # TODO: figure out phase stuff  
 
 def run_goat_optimization(
         H0,
@@ -304,6 +320,7 @@ def run_goat_optimization(
         optimizer_opts=None,
         ode_rtol=1e-7,
         ode_atol=1e-9,
+        calculate_numerical_hessian=False,
         callback=None
 ):
     N = H0.shape[0]
@@ -375,5 +392,23 @@ def run_goat_optimization(
             options=optimizer_opts,
             callback=callback
         )
+    
+    if calculate_numerical_hessian:
+        numerical_hessian = np.zeros((C+1, C+1), dtype=complex)
+        h = 1e-8
+        for i in range(C+1):
+            alpha_forward = res.x.copy()
+            alpha_backward = res.x.copy()
 
-    return res
+            alpha_forward[i] += h
+            alpha_backward[i] -= h
+
+            grad_forward = eval_cost_and_grad(alpha_forward[:-1], alpha_forward[-1])[1]
+            grad_backward = eval_cost_and_grad(alpha_backward[:-1], alpha_backward[-1])[1]
+
+            numerical_hessian[:, i] = (grad_forward - grad_backward) / (2*h)
+        numerical_hessian = -0.5 * np.real(numerical_hessian + numerical_hessian.conj().T)
+    else:
+        numerical_hessian = None
+
+    return res, numerical_hessian
