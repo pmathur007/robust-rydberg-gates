@@ -260,46 +260,41 @@ def to_infidelity_hessian(
     U_sqphase = np.diag(np.exp(1j * single_qubit_phase * single_qubit_phase_weights)) 
     dU_sqphase = np.diag(1j * single_qubit_phase_weights * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
     ddU_sqphase = np.diag(-(single_qubit_phase_weights ** 2) * np.exp(1j * single_qubit_phase * single_qubit_phase_weights))
-    dsqU_ops = U_target.conj().T @ dU_sqphase @ U
-    dsqU_ops_a01 = dsqU_ops[0,0]
-    dsqU_ops_a11 = dsqU_ops[1,1]
 
     U_ops = U_target.conj().T @ U_sqphase @ U
     a01 = U_ops[0,0]
     a11 = U_ops[1,1]
     tr_sum = 1 + 2*a01 + a11
 
-    da01s = np.zeros(C, dtype=complex)
-    da11s = np.zeros(C, dtype=complex)
-    for i in range(C):
-        dU_ops = U_target.conj().T @ U_sqphase @ dU[i]
-        da01s[i] = dU_ops[0,0]
-        da11s[i] = dU_ops[1,1]
+    da01s = np.zeros(C+1, dtype=complex)
+    da11s = np.zeros(C+1, dtype=complex)
+    for i in range(C+1):
+        if i == C:
+            dsqU_ops = U_target.conj().T @ dU_sqphase @ U
+            da01s[i] = dsqU_ops[0,0]
+            da11s[i] = dsqU_ops[1,1]
+        else:
+            dU_ops = U_target.conj().T @ U_sqphase @ dU[i]
+            da01s[i] = dU_ops[0,0]
+            da11s[i] = dU_ops[1,1]
 
     hessian = np.zeros((C+1, C+1), dtype=float)
-    for i in range(C):
-        for j in range(C): 
-            ddU_ops = U_target.conj().T @ U_sqphase @ ddU[C*i+j]
+    for i in range(C+1):
+        for j in range(C+1):
+            if i == C and j == C:
+                ddU_ops = U_target.conj().T @ ddU_sqphase @ U 
+            elif i == C:
+                ddU_ops = U_target.conj().T @ dU_sqphase @ dU[j]
+            elif j == C:
+                ddU_ops = U_target.conj().T @ dU_sqphase @ dU[i]
+            else:
+                ddU_ops = U_target.conj().T @ U_sqphase @ ddU[C*i+j]
+
             dda01 = ddU_ops[0,0]
             dda11 = ddU_ops[1,1]
+
             hessian[i,j] = (1/10) * np.real( (2*dda01 + dda11) * np.conj(tr_sum) + (2*da01s[i] + da11s[i]) * np.conj(2*da01s[j] + da11s[j])
                                             + 2*dda01*np.conj(a01) + 2*da01s[i]*np.conj(da01s[j]) + dda11*np.conj(a11) + da11s[i]*np.conj(da11s[j]) )
-
-        dsqdU_ops = U_target.conj().T @ dU_sqphase @ dU[i]
-        dsqdU_ops_a01 = dsqdU_ops[0, 0]
-        dsqdU_ops_a11 = dsqdU_ops[1, 1]
-        hessian[i,-1] += (1/10) * np.real( (2*dsqdU_ops_a01 + dsqdU_ops_a11) * np.conj(tr_sum) + (2*dsqU_ops_a01 + dsqU_ops_a11) * np.conj(2*da01s[i] + da11s[i])) 
-        hessian[i,-1] += (1/10) * (2 * np.real(dsqdU_ops_a01 * np.conj(a01)) + np.real(dsqdU_ops_a11 * np.conj(a11)))
-        hessian[i,-1] += (1/10) * (2 * np.real(dsqU_ops_a01 * np.conj(da01s[i])) + np.real(dsqU_ops_a11 * np.conj(da11s[i])))
-        hessian[-1,i] = hessian[i,-1]
-
-    ddsqU_ops = U_target.conj().T @ ddU_sqphase @ U
-    ddsqU_ops_a01 = ddsqU_ops[0,0]
-    ddsqU_ops_a11 = ddsqU_ops[1,1]
-    hessian[-1,-1] += (1/10) * np.real( (2*ddsqU_ops_a01 + ddsqU_ops_a11) * np.conj(tr_sum) + (2*dsqU_ops_a01 + dsqU_ops_a11) ** 2)
-    hessian[-1,-1] += (1/10) * (2 * np.real(ddsqU_ops_a01 * np.conj(a01)) + np.real(ddsqU_ops_a11 * np.conj(a11)))
-    hessian[-1,-1] += (1/10) * (2 * np.real(np.abs(dsqU_ops_a01) ** 2) + np.real(np.abs(dsqU_ops_a11) ** 2))
-
     return hessian
 
 def run_goat_optimization(
