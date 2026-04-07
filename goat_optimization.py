@@ -312,6 +312,7 @@ def run_goat_optimization(
         alpha_bounds=None,
         constraints=None,
         control_extra_params=None,
+        cost_extra_params=None,
         optimizer_opts=None,
         ode_rtol=1e-7,
         ode_atol=1e-9,
@@ -354,7 +355,12 @@ def run_goat_optimization(
             U_final = mats_final[0]
             dU_final = mats_final[1:]
 
-        cost, grad = fidelity_func(U_target, U_final, dU_final, single_qubit_phase, single_qubit_phase_weights) 
+        cost, grad = fidelity_func(U_target, U_final, dU_final, single_qubit_phase, single_qubit_phase_weights)
+
+        if cost_extra_params is not None:
+            cost += cost_extra_params["bw_lambda"] * np.sum(cost_extra_params["bw_k"] * np.abs(alpha))
+            grad[:-1] += cost_extra_params["bw_lambda"] * cost_extra_params["bw_k"] * np.sign(alpha)
+
         return cost, grad
 
     if optimization_method == "trust-constr":
